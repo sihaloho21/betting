@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { ChevronLeft, ChevronRight, CheckCircle, XCircle, TrendingUp, TrendingDown } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckCircle, XCircle, TrendingUp, CalendarDays, Activity } from "lucide-react";
 
 interface Histori {
   id: string; tanggal: string; hasil: "MENANG" | "KALAH";
@@ -24,6 +24,10 @@ export default function Kalender({ histori, isDark }: { histori: Histori[]; isDa
 
   const year = month.getFullYear();
   const mi   = month.getMonth();
+
+  const card = isDark
+    ? "rounded-[24px] border border-white/10 bg-white/5 backdrop-blur-xl shadow-2xl"
+    : "rounded-[24px] border border-slate-200 bg-white shadow-xl";
 
   const sessionMap = useMemo(() => {
     const map: Record<string, Histori[]> = {};
@@ -69,100 +73,125 @@ export default function Kalender({ histori, isDark }: { histori: Histori[]; isDa
     return { menang, kalah, profit };
   }, [sessionMap, year, mi, daysInMonth]);
 
-  const card = isDark
-    ? "bg-slate-900/80 border border-white/10 rounded-[20px]"
-    : "bg-white border border-slate-200 rounded-[20px] shadow-sm";
+  const allTimeStats = useMemo(() => {
+    const hariMenang = Object.keys(sessionMap).filter(k => sessionMap[k].every(x => x.hasil === "MENANG")).length;
+    const hariKalah  = Object.keys(sessionMap).filter(k => sessionMap[k].every(x => x.hasil === "KALAH")).length;
+    const hariAktif  = Object.keys(sessionMap).length;
+    return { hariMenang, hariKalah, hariAktif };
+  }, [sessionMap]);
 
   return (
     <div className="animate-slide-up space-y-4">
-      <div className={`${card} p-5`}>
-        <div className="flex items-center justify-between mb-5">
-          <button onClick={() => setMonth(new Date(year, mi - 1, 1))} className={`p-2 rounded-xl ${isDark ? "bg-white/10 hover:bg-white/20" : "bg-slate-100 hover:bg-slate-200"}`}>
-            <ChevronLeft className="w-5 h-5"/>
-          </button>
-          <div className="text-center">
-            <h2 className="text-xl font-black">{BULAN[mi]} {year}</h2>
-            <div className={`text-xs mt-0.5 flex items-center justify-center gap-3 ${isDark ? "text-white/40" : "text-slate-400"}`}>
-              <span className="text-green-400 font-bold">{monthlyStats.menang}W</span>
-              <span className="text-red-400 font-bold">{monthlyStats.kalah}L</span>
-              <span className={`font-bold ${monthlyStats.profit >= 0 ? "text-green-400" : "text-red-400"}`}>
+      {/* Hero header */}
+      <div className="rounded-[24px] bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-600 text-white p-5 shadow-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <CalendarDays className="w-5 h-5 opacity-80"/>
+              <span className="text-xs font-bold opacity-70">KALENDER SESI</span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-black">{BULAN[mi]} {year}</h1>
+            <div className="flex items-center gap-4 mt-1.5 text-sm">
+              <span className="font-black text-green-300">{monthlyStats.menang}W</span>
+              <span className="font-black text-red-300">{monthlyStats.kalah}L</span>
+              <span className={`font-black ${monthlyStats.profit >= 0 ? "text-green-300" : "text-red-300"}`}>
                 {monthlyStats.profit >= 0 ? "+" : ""}Rp {formatRupiahLocal(Math.abs(monthlyStats.profit))}
               </span>
             </div>
           </div>
-          <button onClick={() => setMonth(new Date(year, mi + 1, 1))} className={`p-2 rounded-xl ${isDark ? "bg-white/10 hover:bg-white/20" : "bg-slate-100 hover:bg-slate-200"}`}>
-            <ChevronRight className="w-5 h-5"/>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-7 mb-1">
-          {HARI.map(h => (
-            <div key={h} className={`text-center text-[11px] font-bold py-1 ${isDark ? "text-white/30" : "text-slate-400"}`}>{h}</div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-7 gap-1">
-          {cells.map((day, i) => {
-            if (!day) return <div key={i} />;
-            const status  = dayStatus(day);
-            const dk      = dayKey(day);
-            const isToday = dk === todayKey;
-            const isSel   = selectedKey === dk;
-            const count   = daySessions(day).length;
-            const dayProfit = daySessions(day).reduce((s, h) => s + (h.hasil === "MENANG" ? h.profit : -h.rugi), 0);
-
-            return (
-              <button key={i} onClick={() => setSelectedKey(isSel ? null : dk)}
-                className={`relative flex flex-col items-center justify-center rounded-xl py-2 transition-all min-h-[50px]
-                  ${isSel ? "ring-2 ring-blue-500" : ""}
-                  ${status === "menang" ? isDark ? "bg-green-500/20 hover:bg-green-500/30" : "bg-green-50 hover:bg-green-100" :
-                    status === "kalah"  ? isDark ? "bg-red-500/20 hover:bg-red-500/30"     : "bg-red-50 hover:bg-red-100" :
-                    status === "mixed"  ? isDark ? "bg-yellow-500/20 hover:bg-yellow-500/30" : "bg-yellow-50 hover:bg-yellow-100" :
-                    isDark ? "hover:bg-white/5" : "hover:bg-slate-50"}`}>
-                <span className={`text-sm font-bold ${
-                  isToday ? "text-blue-400" :
-                  status === "menang" ? "text-green-400" :
-                  status === "kalah"  ? "text-red-400" :
-                  status === "mixed"  ? "text-yellow-400" :
-                  isDark ? "text-white/60" : "text-slate-600"
-                }`}>{day}</span>
-                {count > 0 && (
-                  <span className={`text-[9px] font-black leading-none mt-0.5 ${
-                    status === "menang" ? "text-green-400" : status === "kalah" ? "text-red-400" : "text-yellow-400"
-                  }`}>{count}x</span>
-                )}
-                {count > 0 && (
-                  <span className={`text-[8px] leading-none ${dayProfit >= 0 ? "text-green-400" : "text-red-400"}`}>
-                    {dayProfit >= 0 ? "+" : ""}{Math.abs(dayProfit) >= 1000 ? `${Math.round(dayProfit/1000)}k` : dayProfit}
-                  </span>
-                )}
-                {isToday && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-400"/>}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex gap-4 mt-4 pt-3 border-t border-current/10 text-xs">
-          {[
-            { dot:"bg-green-500", label:"Menang" },
-            { dot:"bg-red-500",   label:"Kalah" },
-            { dot:"bg-yellow-500",label:"Campuran" },
-          ].map(l => (
-            <div key={l.label} className="flex items-center gap-1.5">
-              <div className={`w-2.5 h-2.5 rounded-sm ${l.dot} opacity-70`}/>
-              <span className={isDark ? "text-white/40" : "text-slate-400"}>{l.label}</span>
-            </div>
-          ))}
+          <div className="flex items-center gap-2">
+            <button onClick={() => setMonth(new Date(year, mi - 1, 1))} className="p-2.5 rounded-2xl bg-white/20 hover:bg-white/30 transition-all">
+              <ChevronLeft className="w-5 h-5"/>
+            </button>
+            <button onClick={() => setMonth(new Date(year, mi + 1, 1))} className="p-2.5 rounded-2xl bg-white/20 hover:bg-white/30 transition-all">
+              <ChevronRight className="w-5 h-5"/>
+            </button>
+          </div>
         </div>
       </div>
 
+      {histori.length === 0 ? (
+        <div className={`${card} p-12 text-center`}>
+          <CalendarDays className="w-14 h-14 mx-auto mb-4 opacity-20"/>
+          <h3 className="font-black text-lg mb-1">Belum ada data sesi</h3>
+          <p className={`text-sm ${isDark ? "opacity-50" : "text-slate-400"}`}>Mulai bermain untuk melihat riwayat di kalender.</p>
+        </div>
+      ) : (
+        <div className={`${card} p-5`}>
+          <div className="grid grid-cols-7 mb-2">
+            {HARI.map(h => (
+              <div key={h} className={`text-center text-[11px] font-bold py-1 ${isDark ? "text-white/30" : "text-slate-400"}`}>{h}</div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1">
+            {cells.map((day, i) => {
+              if (!day) return <div key={i} />;
+              const status  = dayStatus(day);
+              const dk      = dayKey(day);
+              const isToday = dk === todayKey;
+              const isSel   = selectedKey === dk;
+              const count   = daySessions(day).length;
+              const dayProfit = daySessions(day).reduce((s, h) => s + (h.hasil === "MENANG" ? h.profit : -h.rugi), 0);
+
+              return (
+                <button key={i} onClick={() => setSelectedKey(isSel ? null : dk)}
+                  className={`relative flex flex-col items-center justify-center rounded-xl py-2 transition-all min-h-[52px]
+                    ${isSel ? "ring-2 ring-blue-500 ring-offset-1 " + (isDark ? "ring-offset-slate-950" : "ring-offset-white") : ""}
+                    ${status === "menang" ? isDark ? "bg-green-500/20 hover:bg-green-500/30" : "bg-green-50 hover:bg-green-100 border border-green-200" :
+                      status === "kalah"  ? isDark ? "bg-red-500/20 hover:bg-red-500/30"     : "bg-red-50 hover:bg-red-100 border border-red-200" :
+                      status === "mixed"  ? isDark ? "bg-yellow-500/20 hover:bg-yellow-500/30" : "bg-yellow-50 hover:bg-yellow-100 border border-yellow-200" :
+                      isDark ? "hover:bg-white/5" : "hover:bg-slate-50"}`}>
+                  <span className={`text-sm font-bold ${
+                    isToday ? "text-blue-400" :
+                    status === "menang" ? "text-green-400" :
+                    status === "kalah"  ? "text-red-400" :
+                    status === "mixed"  ? "text-yellow-400" :
+                    isDark ? "text-white/60" : "text-slate-600"
+                  }`}>{day}</span>
+                  {count > 0 && (
+                    <span className={`text-[9px] font-black leading-none mt-0.5 ${
+                      status === "menang" ? "text-green-400" : status === "kalah" ? "text-red-400" : "text-yellow-400"
+                    }`}>{count}x</span>
+                  )}
+                  {count > 0 && (
+                    <span className={`text-[8px] leading-none ${dayProfit >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {dayProfit >= 0 ? "+" : ""}{Math.abs(dayProfit) >= 1000 ? `${Math.round(dayProfit/1000)}k` : dayProfit}
+                    </span>
+                  )}
+                  {isToday && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-400"/>}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex gap-4 mt-4 pt-3 border-t border-current/10 text-xs flex-wrap">
+            {[
+              { dot:"bg-green-500", label:"Menang" },
+              { dot:"bg-red-500",   label:"Kalah" },
+              { dot:"bg-yellow-500",label:"Campuran" },
+            ].map(l => (
+              <div key={l.label} className="flex items-center gap-1.5">
+                <div className={`w-2.5 h-2.5 rounded-sm ${l.dot} opacity-70`}/>
+                <span className={isDark ? "text-white/40" : "text-slate-400"}>{l.label}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-blue-400"/>
+              <span className={isDark ? "text-white/40" : "text-slate-400"}>Hari ini</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedKey && (
-        <div className={`${card} p-5 animate-slide-up`}>
-          <h3 className="font-black mb-3 text-sm">{
-            (() => { const parts = selectedKey.split("-"); return `${parseInt(parts[2])} ${BULAN[parseInt(parts[1])]} ${parts[0]}`; })()
-          }</h3>
+        <div className={`${card} p-5 animate-slide-up border-l-4 border-blue-500`}>
+          <h3 className="font-black mb-3 flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-blue-400"/>
+            {(() => { const parts = selectedKey.split("-"); return `${parseInt(parts[2])} ${BULAN[parseInt(parts[1])]} ${parts[0]}`; })()}
+          </h3>
           {selectedSessions.length === 0 ? (
-            <p className={`text-sm opacity-50 text-center py-6`}>Tidak ada sesi</p>
+            <p className={`text-sm opacity-50 text-center py-6`}>Tidak ada sesi hari ini</p>
           ) : (
             <div className="space-y-2">
               {selectedSessions.map((s, i) => (
@@ -190,22 +219,16 @@ export default function Kalender({ histori, isDark }: { histori: Histori[]; isDa
         </div>
       )}
 
-      {histori.length === 0 && (
-        <div className={`${card} p-12 text-center`}>
-          <TrendingUp className="w-12 h-12 mx-auto opacity-20 mb-3"/>
-          <p className={`text-sm ${isDark ? "opacity-50" : "text-slate-400"}`}>Belum ada data. Mulai bermain untuk melihat riwayat kalender.</p>
-        </div>
-      )}
-
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label:"Hari Menang", val:Object.keys(sessionMap).filter(k => { const s = sessionMap[k]; return s.every(x => x.hasil === "MENANG"); }).length, color:"text-green-400", icon:<CheckCircle className="w-4 h-4"/> },
-          { label:"Hari Kalah",  val:Object.keys(sessionMap).filter(k => { const s = sessionMap[k]; return s.every(x => x.hasil === "KALAH"); }).length,  color:"text-red-400",   icon:<XCircle className="w-4 h-4"/> },
-          { label:"Hari Aktif",  val:Object.keys(sessionMap).length, color:"text-blue-400", icon:<TrendingDown className="w-4 h-4"/> },
+          { label:"Hari Menang", val:allTimeStats.hariMenang, color:"text-green-400", bg:"from-green-600/20 to-emerald-600/10", border:"border-green-500/20", icon:<CheckCircle className="w-5 h-5 text-green-400"/> },
+          { label:"Hari Kalah",  val:allTimeStats.hariKalah,  color:"text-red-400",   bg:"from-red-600/20 to-rose-600/10",     border:"border-red-500/20",   icon:<XCircle className="w-5 h-5 text-red-400"/> },
+          { label:"Total Aktif", val:allTimeStats.hariAktif,  color:"text-blue-400",  bg:"from-blue-600/20 to-indigo-600/10",  border:"border-blue-500/20",  icon:<Activity className="w-5 h-5 text-blue-400"/> },
         ].map((s, i) => (
-          <div key={i} className={`${card} p-4 flex flex-col gap-1`}>
-            <div className={`flex items-center gap-1.5 text-xs ${isDark ? "text-white/40" : "text-slate-500"}`}>{s.icon}{s.label}</div>
+          <div key={i} className={`rounded-[24px] border ${s.border} bg-gradient-to-br ${s.bg} p-4 flex flex-col gap-2 backdrop-blur-xl`}>
+            {s.icon}
             <div className={`text-2xl font-black ${s.color}`}>{s.val}</div>
+            <div className={`text-xs font-bold ${isDark ? "text-white/40" : "text-slate-500"}`}>{s.label}</div>
           </div>
         ))}
       </div>
