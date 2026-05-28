@@ -392,6 +392,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
   const [showEditNumbers, setShowEditNumbers] = useState(false);
   const [showManualResult, setShowManualResult] = useState(false);
   const [showStopLoss, setShowStopLoss]     = useState(false);
+  const [showNotifSettings, setShowNotifSettings] = useState(false);
   const [guideStep, setGuideStep]           = useState(0);
 
   // ── Target harian & slot notifikasi ──────────────────────────────────────────
@@ -592,9 +593,29 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
   useEffect(() => { lsSet("resumePutaranMenang", putaranMenang); }, [putaranMenang]);
   useEffect(() => { lsSet("targetHarian", targetHarian); }, [targetHarian]);
 
-  // ── Slot time notifications ───────────────────────────────────────────────────
+  // ── Slot time notifications (two-stage: 15 min + 5 min) ──────────────────────
   useEffect(() => {
     if (!slotNotifEnabled) return;
+
+    function playBeep(freq: number, duration: number, vol = 0.4) {
+      try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        osc.start(); osc.stop(ctx.currentTime + duration);
+      } catch { /* audio not supported */ }
+    }
+
+    function firePushNotif(title: string, body: string) {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification(title, { body, icon: "/favicon.ico" });
+      }
+    }
+
     const check = () => {
       const now = new Date();
       TIME_SLOTS.forEach(slot => {
@@ -602,29 +623,34 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
         const slotDate = new Date(now);
         slotDate.setHours(h, m, 0, 0);
         const diff = slotDate.getTime() - now.getTime();
-        const key = `${slot}-${now.toDateString()}`;
-        if (diff > 0 && diff <= 5 * 60 * 1000 && !slotNotifFiredRef.current[key]) {
-          slotNotifFiredRef.current[key] = true;
+        const dateKey = now.toDateString();
+
+        // 15-minute early warning
+        const key15 = `${slot}-15min-${dateKey}`;
+        if (diff > 0 && diff <= 15 * 60 * 1000 && diff > 5 * 60 * 1000 && !slotNotifFiredRef.current[key15]) {
+          slotNotifFiredRef.current[key15] = true;
           const minsLeft = Math.ceil(diff / 60000);
-          toast.warning(`⏰ Slot ${slot} dalam ${minsLeft} menit!`);
-          if (Notification.permission === "granted") {
-            new Notification(`⏰ Slot ${slot} TTM4D`, { body: `${minsLeft} menit lagi — siapkan nomor taruhan kamu!` });
-          }
-          try {
-            const ctx = new AudioContext();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain); gain.connect(ctx.destination);
-            osc.frequency.value = 880;
-            gain.gain.setValueAtTime(0.4, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-            osc.start(); osc.stop(ctx.currentTime + 0.6);
-          } catch { /* audio not supported */ }
+          toast.info(`🔔 Slot ${slot} dalam ${minsLeft} menit — siap-siap!`, { duration: 6000 });
+          firePushNotif(`🔔 Persiapan Slot ${slot}`, `${minsLeft} menit lagi — mulai siapkan nomor taruhan kamu!`);
+          playBeep(660, 0.4, 0.3);
+        }
+
+        // 5-minute final warning
+        const key5 = `${slot}-5min-${dateKey}`;
+        if (diff > 0 && diff <= 5 * 60 * 1000 && !slotNotifFiredRef.current[key5]) {
+          slotNotifFiredRef.current[key5] = true;
+          const minsLeft = Math.ceil(diff / 60000);
+          toast.warning(`⚡ SEGERA! Slot ${slot} dalam ${minsLeft} menit!`, { duration: 8000 });
+          firePushNotif(`⚡ SEGERA Pasang! Slot ${slot}`, `Tinggal ${minsLeft} menit — pasang taruhan sekarang!`);
+          // Double-beep for urgency
+          playBeep(880, 0.5, 0.5);
+          setTimeout(() => playBeep(880, 0.5, 0.5), 600);
         }
       });
     };
+
     check();
-    const t = setInterval(check, 30000);
+    const t = setInterval(check, 20000);
     return () => clearInterval(t);
   }, [slotNotifEnabled]);
 
@@ -981,18 +1007,11 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
 
             {/* Slot notif toggle */}
             <button
-              onClick={() => {
-                const next = !slotNotifEnabled;
-                setSlotNotifEnabled(next);
-                lsSet("slotNotifEnabled", next);
-                if (next && typeof Notification !== "undefined" && Notification.permission === "default") {
-                  Notification.requestPermission();
-                }
-                toast.success(next ? "⏰ Notifikasi slot waktu aktif" : "Notifikasi slot waktu dimatikan");
-              }}
-              title={`Notifikasi slot ${slotNotifEnabled ? "aktif" : "nonaktif"}`}
-              className={`p-2 rounded-xl transition-all ${slotNotifEnabled ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" : isDark ? "bg-white/10 hover:bg-white/15 text-white/60" : "bg-slate-100 hover:bg-slate-200 text-slate-500"}`}>
+              onClick={() => setShowNotifSettings(true)}
+              title={`Pengaturan notifikasi slot — ${slotNotifEnabled ? "Aktif" : "Nonaktif"}`}
+              className={`relative p-2 rounded-xl transition-all ${slotNotifEnabled ? "bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse" : isDark ? "bg-white/10 hover:bg-white/15 text-white/60" : "bg-slate-100 hover:bg-slate-200 text-slate-500"}`}>
               <BellRing className="w-4 h-4" />
+              {slotNotifEnabled && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-blue-400 rounded-full"/>}
             </button>
 
             {/* Notif */}
@@ -1843,6 +1862,101 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
               <button onClick={() => setShowProfile(false)} className={`flex-1 py-2.5 rounded-2xl font-bold text-sm ${isDark ? "bg-white/10" : "bg-slate-100"}`}>Batal</button>
               <button onClick={() => { setProfile(profileEdit); setShowProfile(false); toast.success("Profil disimpan!"); }} className="flex-1 py-2.5 rounded-2xl bg-blue-600 text-white font-bold text-sm">Simpan</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL: Notifikasi Slot ══ */}
+      {showNotifSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={() => setShowNotifSettings(false)}>
+          <div className={`${isDark ? "bg-slate-900 border border-white/10" : "bg-white border border-slate-200"} rounded-[28px] shadow-2xl w-full max-w-sm p-6`} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                  <BellRing className="w-4 h-4 text-white"/>
+                </div>
+                <div>
+                  <h2 className="text-lg font-black leading-none">Notifikasi Slot</h2>
+                  <p className={`text-[11px] mt-0.5 ${isDark ? "text-white/50" : "text-slate-400"}`}>Pengingat waktu buka pasaran</p>
+                </div>
+              </div>
+              <button onClick={() => setShowNotifSettings(false)} className={`p-2 rounded-xl ${isDark ? "hover:bg-white/10" : "hover:bg-slate-100"}`}><X className="w-5 h-5"/></button>
+            </div>
+
+            {/* Countdown to next slot */}
+            <div className={`p-4 rounded-2xl mb-4 text-center ${isDark ? "bg-blue-500/10 border border-blue-500/20" : "bg-blue-50 border border-blue-200"}`}>
+              <div className={`text-xs font-bold mb-1 ${isDark ? "text-blue-300/70" : "text-blue-500"}`}>Slot Berikutnya — {getNextSlotLabel()} WIB</div>
+              <CountdownWidget isDark={isDark} />
+            </div>
+
+            {/* Jadwal slot */}
+            <div className={`p-3 rounded-xl mb-4 ${isDark ? "bg-white/5 border border-white/10" : "bg-slate-50 border border-slate-200"}`}>
+              <div className={`text-xs font-bold mb-2 ${isDark ? "text-white/50" : "text-slate-500"}`}>Jadwal Slot Hari Ini</div>
+              <div className="flex flex-wrap gap-1.5">
+                {TIME_SLOTS.map(slot => {
+                  const [h, m] = slot.split(":").map(Number);
+                  const slotDate = new Date(); slotDate.setHours(h, m, 0, 0);
+                  const passed = slotDate < new Date();
+                  return (
+                    <span key={slot} className={`px-2.5 py-1 rounded-lg text-xs font-black ${passed ? isDark ? "bg-white/5 text-white/30 line-through" : "bg-slate-100 text-slate-300 line-through" : slot === getNextSlotLabel() ? "bg-blue-500 text-white ring-2 ring-blue-400/40" : isDark ? "bg-white/10 text-white/70" : "bg-slate-200 text-slate-600"}`}>
+                      {slot}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Permission status */}
+            {typeof Notification !== "undefined" && Notification.permission !== "granted" && (
+              <div className={`p-3 rounded-xl mb-4 flex items-start gap-2.5 ${isDark ? "bg-orange-500/10 border border-orange-500/20" : "bg-orange-50 border border-orange-200"}`}>
+                <AlertCircle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5"/>
+                <div>
+                  <div className="text-xs font-black text-orange-400">Izin Notifikasi Browser Belum Diberikan</div>
+                  <div className={`text-[11px] mt-0.5 ${isDark ? "text-white/50" : "text-slate-500"}`}>
+                    {Notification.permission === "denied"
+                      ? "Notifikasi diblokir browser. Buka Settings browser → izinkan notifikasi untuk situs ini."
+                      : "Klik tombol di bawah untuk mengaktifkan notifikasi browser."}
+                  </div>
+                  {Notification.permission === "default" && (
+                    <button onClick={() => Notification.requestPermission().then(p => { if (p === "granted") toast.success("✅ Izin notifikasi diberikan!"); })}
+                      className="mt-2 px-3 py-1.5 rounded-lg bg-orange-500 text-white text-xs font-black hover:bg-orange-600 transition-all">
+                      Izinkan Notifikasi
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Toggle */}
+            <div className={`flex items-center justify-between p-4 rounded-2xl mb-4 ${isDark ? "bg-white/5 border border-white/10" : "bg-slate-50 border border-slate-200"}`}>
+              <div>
+                <div className="font-black text-sm">Aktifkan Pengingat</div>
+                <div className={`text-xs mt-0.5 ${isDark ? "text-white/50" : "text-slate-400"}`}>Notifikasi 15 menit & 5 menit sebelum slot</div>
+              </div>
+              <button onClick={() => {
+                  const next = !slotNotifEnabled;
+                  setSlotNotifEnabled(next);
+                  lsSet("slotNotifEnabled", next);
+                  if (next && typeof Notification !== "undefined" && Notification.permission === "default") {
+                    Notification.requestPermission().then(p => { if (p === "granted") toast.success("✅ Izin notifikasi diberikan!"); });
+                  }
+                  toast.success(next ? "⏰ Notifikasi slot aktif!" : "Notifikasi slot dimatikan");
+                }}
+                className={`relative w-12 h-6 rounded-full transition-all duration-300 ${slotNotifEnabled ? "bg-blue-500" : isDark ? "bg-white/20" : "bg-slate-300"}`}>
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all duration-300 ${slotNotifEnabled ? "left-6" : "left-0.5"}`}/>
+              </button>
+            </div>
+
+            {/* Info */}
+            <div className={`space-y-2 text-xs ${isDark ? "text-white/50" : "text-slate-400"}`}>
+              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-black flex-shrink-0">🔔</span><span>15 menit sebelum — peringatan awal, siapkan nomor</span></div>
+              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-orange-500/20 text-orange-400 flex items-center justify-center text-[10px] font-black flex-shrink-0">⚡</span><span>5 menit sebelum — peringatan mendesak + bunyi beep</span></div>
+            </div>
+
+            <button onClick={() => setShowNotifSettings(false)} className={`w-full mt-5 py-2.5 rounded-2xl font-bold text-sm ${isDark ? "bg-white/10 hover:bg-white/15" : "bg-slate-100 hover:bg-slate-200"}`}>
+              Tutup
+            </button>
           </div>
         </div>
       )}
