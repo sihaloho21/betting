@@ -318,30 +318,95 @@ class GithubDB {
   }
 }
 
+// ─── Audio helpers ────────────────────────────────────────────────────────────
+function playTone(freq: number, duration: number, vol = 0.35, type: OscillatorType = "sine") {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(); osc.stop(ctx.currentTime + duration);
+  } catch { /* unsupported */ }
+}
+
+function playArpeggio(freqs: number[], step: number, vol = 0.35) {
+  freqs.forEach((f, i) => setTimeout(() => playTone(f, step * 0.9, vol), i * step * 1000));
+}
+
+function playAlarm15() {
+  // Friendly 3-note ascending arpeggio
+  playArpeggio([523, 659, 784], 0.22, 0.35);
+}
+
+function playAlarm5() {
+  // Urgent 3x double-beep
+  [0, 350, 700].forEach(offset =>
+    setTimeout(() => {
+      playTone(880, 0.12, 0.5, "square");
+      setTimeout(() => playTone(1046, 0.12, 0.5, "square"), 150);
+    }, offset)
+  );
+}
+
+function playTickSound() {
+  playTone(800, 0.03, 0.18, "sine");
+}
+
 // ─── CountdownWidget ──────────────────────────────────────────────────────────
-function CountdownWidget({ isDark }: { isDark: boolean }) {
+function CountdownWidget({ isDark, soundEnabled = false }: { isDark: boolean; soundEnabled?: boolean }) {
   const [remaining, setRemaining] = useState("");
   const [nextLabel, setNextLabel] = useState("");
+  const [diffMs, setDiffMs] = useState(Infinity);
+  const lastTickSecRef = useRef(-1);
+
   useEffect(() => {
     const update = () => {
       const next = getNextSlotDate();
       const label = getNextSlotLabel();
       const diff = next.getTime() - Date.now();
-      if (diff <= 0) { setRemaining("00:00:00"); setNextLabel(label); return; }
+      setDiffMs(diff);
+      setNextLabel(label);
+      if (diff <= 0) { setRemaining("00:00:00"); return; }
       const h = Math.floor(diff / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
       setRemaining(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`);
-      setNextLabel(label);
+
+      // Tick sounds when countdown is close
+      if (soundEnabled && diff <= 60000) {
+        const secLeft = Math.ceil(diff / 1000);
+        if (secLeft !== lastTickSecRef.current) {
+          lastTickSecRef.current = secLeft;
+          if (secLeft <= 10) {
+            // Every second — distinct rising pitch
+            playTone(400 + secLeft * 60, 0.08, 0.25, "sine");
+          } else if (secLeft % 5 === 0) {
+            // Every 5 seconds — soft tick
+            playTickSound();
+          }
+        }
+      }
     };
     update();
     const t = setInterval(update, 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [soundEnabled]);
+
+  const isUrgent = diffMs <= 60000;
+  const isVeryUrgent = diffMs <= 10000;
+
   return (
-    <div className={`hidden md:flex flex-col items-center px-3 py-1.5 rounded-xl text-xs font-bold cursor-default ${isDark ? "bg-blue-500/15 border border-blue-500/30 text-blue-300" : "bg-blue-50 border border-blue-200 text-blue-600"}`} title={`Next slot: ${nextLabel}`}>
+    <div className={`hidden md:flex flex-col items-center px-3 py-1.5 rounded-xl text-xs font-bold cursor-default transition-all ${
+      isVeryUrgent ? "bg-red-500/30 border border-red-500/50 text-red-300 animate-pulse" :
+      isUrgent ? "bg-orange-500/20 border border-orange-500/40 text-orange-300" :
+      isDark ? "bg-blue-500/15 border border-blue-500/30 text-blue-300" : "bg-blue-50 border border-blue-200 text-blue-600"
+    }`} title={`Next slot: ${nextLabel}`}>
       <div className="text-[8px] opacity-60 leading-none">NEXT {nextLabel}</div>
-      <div className="tabular-nums tracking-wider leading-tight">{remaining || "..."}</div>
+      <div className={`tabular-nums tracking-wider leading-tight ${isUrgent ? "scale-110" : ""}`}>{remaining || "..."}</div>
     </div>
   );
 }
@@ -399,6 +464,9 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
   const [targetHarian, setTargetHarian]       = useState<number>(() => ls("targetHarian", 100000));
   const [slotNotifEnabled, setSlotNotifEnabled] = useState<boolean>(() => ls("slotNotifEnabled", false));
   const slotNotifFiredRef = useRef<Record<string, boolean>>({});
+  const [swStatus, setSwStatus]               = useState<"unsupported"|"registering"|"active"|"error">("registering");
+  const [swTimers, setSwTimers]               = useState(0);
+  const swRegRef = useRef<ServiceWorkerRegistration | null>(null);
 
   // ── Custom nomor & stop loss ──────────────────────────────────────────────────
   const [customNumbers, setCustomNumbers]     = useState<string>(() => ls("customNumbers", DEFAULT_NUMBERS));
@@ -593,28 +661,42 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
   useEffect(() => { lsSet("resumePutaranMenang", putaranMenang); }, [putaranMenang]);
   useEffect(() => { lsSet("targetHarian", targetHarian); }, [targetHarian]);
 
-  // ── Slot time notifications (two-stage: 15 min + 5 min) ──────────────────────
+  // ── Register Service Worker ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) { setSwStatus("unsupported"); return; }
+    navigator.serviceWorker.register("/sw.js")
+      .then(reg => { swRegRef.current = reg; setSwStatus("active"); })
+      .catch(() => setSwStatus("error"));
+  }, []);
+
+  // ── Schedule / cancel SW background notifications ─────────────────────────────
+  useEffect(() => {
+    const sw = navigator.serviceWorker?.controller ?? swRegRef.current?.active;
+    if (!sw) return;
+    sw.postMessage({ type: "SCHEDULE", enabled: slotNotifEnabled });
+
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === "SCHEDULED") setSwTimers(e.data.count ?? 0);
+      if (e.data?.type === "CANCELLED")  setSwTimers(0);
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, [slotNotifEnabled, swStatus]);
+
+  // ── Keepalive ping (every 45 s) to prevent SW from being killed ───────────────
   useEffect(() => {
     if (!slotNotifEnabled) return;
+    const ping = () => {
+      const sw = navigator.serviceWorker?.controller ?? swRegRef.current?.active;
+      sw?.postMessage({ type: "PING" });
+    };
+    const t = setInterval(ping, 45000);
+    return () => clearInterval(t);
+  }, [slotNotifEnabled]);
 
-    function playBeep(freq: number, duration: number, vol = 0.4) {
-      try {
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(vol, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-        osc.start(); osc.stop(ctx.currentTime + duration);
-      } catch { /* audio not supported */ }
-    }
-
-    function firePushNotif(title: string, body: string) {
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification(title, { body, icon: "/favicon.ico" });
-      }
-    }
+  // ── In-page slot notifications with rich audio (fallback when tab is visible) ──
+  useEffect(() => {
+    if (!slotNotifEnabled) return;
 
     const check = () => {
       const now = new Date();
@@ -629,22 +711,18 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
         const key15 = `${slot}-15min-${dateKey}`;
         if (diff > 0 && diff <= 15 * 60 * 1000 && diff > 5 * 60 * 1000 && !slotNotifFiredRef.current[key15]) {
           slotNotifFiredRef.current[key15] = true;
-          const minsLeft = Math.ceil(diff / 60000);
-          toast.info(`🔔 Slot ${slot} dalam ${minsLeft} menit — siap-siap!`, { duration: 6000 });
-          firePushNotif(`🔔 Persiapan Slot ${slot}`, `${minsLeft} menit lagi — mulai siapkan nomor taruhan kamu!`);
-          playBeep(660, 0.4, 0.3);
+          toast.info(`🔔 Slot ${slot} dalam ${Math.ceil(diff / 60000)} menit — siap-siap!`, { duration: 7000 });
+          playAlarm15();
+          addNotif(`⏰ Siap-siap slot ${slot} — ${Math.ceil(diff / 60000)} menit lagi`);
         }
 
         // 5-minute final warning
         const key5 = `${slot}-5min-${dateKey}`;
         if (diff > 0 && diff <= 5 * 60 * 1000 && !slotNotifFiredRef.current[key5]) {
           slotNotifFiredRef.current[key5] = true;
-          const minsLeft = Math.ceil(diff / 60000);
-          toast.warning(`⚡ SEGERA! Slot ${slot} dalam ${minsLeft} menit!`, { duration: 8000 });
-          firePushNotif(`⚡ SEGERA Pasang! Slot ${slot}`, `Tinggal ${minsLeft} menit — pasang taruhan sekarang!`);
-          // Double-beep for urgency
-          playBeep(880, 0.5, 0.5);
-          setTimeout(() => playBeep(880, 0.5, 0.5), 600);
+          toast.warning(`⚡ SEGERA! Slot ${slot} dalam ${Math.ceil(diff / 60000)} menit!`, { duration: 10000 });
+          playAlarm5();
+          addNotif(`⚡ SEGERA pasang taruhan — slot ${slot} tinggal ${Math.ceil(diff / 60000)} menit!`);
         }
       });
     };
@@ -961,7 +1039,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
 
           <div className="flex items-center gap-1.5">
             {/* Countdown to next slot */}
-            <CountdownWidget isDark={isDark} />
+            <CountdownWidget isDark={isDark} soundEnabled={slotNotifEnabled} />
 
             {/* Live clock */}
             <ClockWidget isDark={isDark} />
@@ -1887,7 +1965,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
             {/* Countdown to next slot */}
             <div className={`p-4 rounded-2xl mb-4 text-center ${isDark ? "bg-blue-500/10 border border-blue-500/20" : "bg-blue-50 border border-blue-200"}`}>
               <div className={`text-xs font-bold mb-1 ${isDark ? "text-blue-300/70" : "text-blue-500"}`}>Slot Berikutnya — {getNextSlotLabel()} WIB</div>
-              <CountdownWidget isDark={isDark} />
+              <CountdownWidget isDark={isDark} soundEnabled={slotNotifEnabled} />
             </div>
 
             {/* Jadwal slot */}
@@ -1929,10 +2007,10 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
             )}
 
             {/* Toggle */}
-            <div className={`flex items-center justify-between p-4 rounded-2xl mb-4 ${isDark ? "bg-white/5 border border-white/10" : "bg-slate-50 border border-slate-200"}`}>
+            <div className={`flex items-center justify-between p-4 rounded-2xl mb-3 ${isDark ? "bg-white/5 border border-white/10" : "bg-slate-50 border border-slate-200"}`}>
               <div>
                 <div className="font-black text-sm">Aktifkan Pengingat</div>
-                <div className={`text-xs mt-0.5 ${isDark ? "text-white/50" : "text-slate-400"}`}>Notifikasi 15 menit & 5 menit sebelum slot</div>
+                <div className={`text-xs mt-0.5 ${isDark ? "text-white/50" : "text-slate-400"}`}>Suara + notifikasi 15 & 5 menit sebelum slot</div>
               </div>
               <button onClick={() => {
                   const next = !slotNotifEnabled;
@@ -1948,13 +2026,31 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
               </button>
             </div>
 
-            {/* Info */}
-            <div className={`space-y-2 text-xs ${isDark ? "text-white/50" : "text-slate-400"}`}>
-              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-black flex-shrink-0">🔔</span><span>15 menit sebelum — peringatan awal, siapkan nomor</span></div>
-              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-orange-500/20 text-orange-400 flex items-center justify-center text-[10px] font-black flex-shrink-0">⚡</span><span>5 menit sebelum — peringatan mendesak + bunyi beep</span></div>
+            {/* SW Status */}
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-xs font-bold ${
+              swStatus === "active"       ? isDark ? "bg-green-500/10 border border-green-500/20 text-green-400" : "bg-green-50 border border-green-200 text-green-600" :
+              swStatus === "unsupported"  ? isDark ? "bg-slate-500/10 border border-slate-500/20 text-slate-400" : "bg-slate-100 border border-slate-200 text-slate-400" :
+              swStatus === "error"        ? isDark ? "bg-red-500/10 border border-red-500/20 text-red-400"       : "bg-red-50 border border-red-200 text-red-500" :
+              isDark ? "bg-white/5 border border-white/10 text-white/40" : "bg-slate-50 border border-slate-200 text-slate-400"
+            }`}>
+              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${swStatus === "active" ? "bg-green-400 animate-pulse" : swStatus === "error" ? "bg-red-400" : "bg-slate-400"}`}/>
+              {swStatus === "active"      && `Background Worker aktif${swTimers > 0 ? ` — ${swTimers} alarm terjadwal` : ""}`}
+              {swStatus === "unsupported" && "Browser tidak mendukung background notifications"}
+              {swStatus === "error"       && "Background Worker gagal — notifikasi hanya aktif saat tab terbuka"}
+              {swStatus === "registering" && "Memuat background worker..."}
             </div>
 
-            <button onClick={() => setShowNotifSettings(false)} className={`w-full mt-5 py-2.5 rounded-2xl font-bold text-sm ${isDark ? "bg-white/10 hover:bg-white/15" : "bg-slate-100 hover:bg-slate-200"}`}>
+            {/* Info */}
+            <div className={`space-y-2 text-xs ${isDark ? "text-white/50" : "text-slate-400"}`}>
+              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center flex-shrink-0">🔔</span><span>15 menit sebelum — arpeggio lembut, siapkan nomor</span></div>
+              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-orange-500/20 text-orange-400 flex items-center justify-center flex-shrink-0">⚡</span><span>5 menit sebelum — alarm mendesak 3x double-beep</span></div>
+              <div className="flex items-center gap-2"><span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center flex-shrink-0">🎵</span><span>60 detik terakhir — tick countdown tiap detik</span></div>
+              <div className={`pt-1 border-t ${isDark ? "border-white/10 text-white/30" : "border-slate-200 text-slate-300"}`}>
+                ⚠️ Suara hanya berbunyi saat tab aktif. Browser notification berbunyi juga saat tab diminimize.
+              </div>
+            </div>
+
+            <button onClick={() => setShowNotifSettings(false)} className={`w-full mt-4 py-2.5 rounded-2xl font-bold text-sm ${isDark ? "bg-white/10 hover:bg-white/15" : "bg-slate-100 hover:bg-slate-200"}`}>
               Tutup
             </button>
           </div>
