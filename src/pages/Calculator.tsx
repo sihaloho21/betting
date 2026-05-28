@@ -177,8 +177,8 @@ function getNextSlotLabel(): string {
 // ─── Check if angka matches nomor taruhan ─────────────────────────────────────
 function isNomorMenang(angka: string, nomorList: string): boolean {
   if (!angka || angka === "-" || angka.length !== 4) return false;
-  const lastTwo = angka.slice(-2);
-  return nomorList.split(/[* ,]+/).some(n => n.trim() === lastTwo);
+  const firstTwo = angka.slice(0, 2); // 2D depan
+  return nomorList.split(/[* ,]+/).some(n => n.trim() === firstTwo);
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -547,6 +547,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
   const [targetHarian, setTargetHarian]       = useState<number>(() => ls("targetHarian", 100000));
   const [slotNotifEnabled, setSlotNotifEnabled] = useState<boolean>(() => ls("slotNotifEnabled", false));
   const slotNotifFiredRef = useRef<Record<string, boolean>>({});
+  const lastResultFpRef   = useRef<string>("");
   const [swStatus, setSwStatus]               = useState<"unsupported"|"registering"|"active"|"error">("registering");
   const [swTimers, setSwTimers]               = useState(0);
   const swRegRef = useRef<ServiceWorkerRegistration | null>(null);
@@ -862,6 +863,47 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
     return () => clearTimeout(timer);
   }, [autoRefresh]);
 
+  function buildResultFp(rows: typeof FALLBACK_RESULTS): string {
+    if (!rows.length) return "";
+    return `${rows[0].tanggal}|${TIME_SLOTS.map(s => rows[0][s as keyof typeof rows[0]] ?? "-").join(",")}`;
+  }
+
+  function tryShowResultNotif(rows: typeof FALLBACK_RESULTS) {
+    if (Notification.permission !== "granted") return;
+    const fp = buildResultFp(rows);
+    if (!fp || fp === lastResultFpRef.current) return;
+    const prev = lastResultFpRef.current;
+    lastResultFpRef.current = fp;
+    if (!prev) return; // first load, skip
+    const prevVals = prev.split("|")[1]?.split(",") ?? [];
+    const row = rows[0];
+    TIME_SLOTS.forEach((slot, i) => {
+      const val = String((row as Record<string, string>)[slot] ?? "-");
+      const wasEmpty = !prevVals[i] || prevVals[i] === "-";
+      if (val !== "-" && val.length === 4 && wasEmpty) {
+        const isWin = isNomorMenang(val, customNumbers);
+        new Notification(`🎰 Hasil Toto Macau ${slot} WIB`, {
+          body: isWin
+            ? `⭐ MENANG! Angka: ${val} — ${row.tanggal}`
+            : `Angka: ${val} — ${row.tanggal} (tidak ada di list taruhan)`,
+          icon: "/favicon.ico",
+          tag: `toto-${slot}-${row.tanggal}`,
+          silent: false,
+        });
+        if (isWin) addNotif(`⭐ MENANG! Slot ${slot}: ${val} — ${row.tanggal}`);
+        else addNotif(`Hasil ${slot}: ${val} — ${row.tanggal}`);
+      }
+    });
+  }
+
+  function requestResultNotifPermission() {
+    if (!("Notification" in window)) { toast.error("Browser ini tidak mendukung notifikasi"); return; }
+    Notification.requestPermission().then(p => {
+      if (p === "granted") { toast.success("🔔 Notifikasi hasil aktif! Kamu akan dapat notif tiap hasil baru keluar."); }
+      else { toast.error("Notifikasi ditolak — aktifkan di pengaturan browser kamu"); }
+    });
+  }
+
   function handleRefreshResults(silent = false) {
     if (isRefreshing) return;
     setIsRefreshing(true);
@@ -869,6 +911,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
     fetchSohokartuResults()
       .then(rows => {
         if (rows && rows.length > 0) {
+          tryShowResultNotif(rows as typeof FALLBACK_RESULTS);
           setResultData(rows as typeof FALLBACK_RESULTS);
           setLastRefresh(new Date());
           setResultSource("live");
@@ -1566,6 +1609,11 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
                   <input type="text" placeholder="Cari nomor..." value={searchResult} onChange={e => setSearchResult(e.target.value)} className="px-3 py-2 rounded-xl bg-white/20 border border-white/30 text-white placeholder-white/60 text-xs w-36 focus:outline-none"/>
                   <button onClick={() => handleRefreshResults(false)} disabled={isRefreshing} className="px-3 py-2 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 text-white font-bold text-xs flex items-center gap-1 disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`}/>Refresh</button>
                   <button onClick={() => setAutoRefresh(v => !v)} className={`px-3 py-2 rounded-xl font-bold text-xs border transition-all ${autoRefresh ? "bg-green-500/30 border-green-400/50" : "bg-white/10 border-white/30"}`}>Auto {autoRefresh ? "✓" : "✗"}</button>
+                  <button onClick={requestResultNotifPermission} title="Aktifkan notifikasi browser saat hasil baru keluar" className={`px-3 py-2 rounded-xl font-bold text-xs border flex items-center gap-1 transition-all ${
+                    typeof Notification !== "undefined" && Notification.permission === "granted"
+                      ? "bg-green-500/30 border-green-400/50 text-green-200"
+                      : "bg-white/10 border-white/30 text-white hover:bg-white/20"
+                  }`}><Bell className="w-3.5 h-3.5"/>{typeof Notification !== "undefined" && Notification.permission === "granted" ? "Notif ✓" : "Notif"}</button>
                   <button onClick={() => { setManualDate(new Date().toISOString().split("T")[0]); setShowManualResult(true); }} className="px-3 py-2 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 text-white font-bold text-xs flex items-center gap-1"><PlusCircle className="w-3.5 h-3.5"/>Input Manual</button>
                 </div>
               </div>
@@ -1932,7 +1980,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
                 />
                 {manualAngka.length === 4 && (
                   <p className={`text-xs mt-1 ${isNomorMenang(manualAngka, customNumbers) ? "text-yellow-400 font-bold" : isDark ? "text-white/40" : "text-slate-400"}`}>
-                    {isNomorMenang(manualAngka, customNumbers) ? "★ Nomor ini ADA dalam daftar taruhan kamu!" : `2 digit akhir: ${manualAngka.slice(-2)} — tidak ada di daftar taruhan`}
+                    {isNomorMenang(manualAngka, customNumbers) ? "★ Nomor ini ADA dalam daftar taruhan kamu!" : `2 digit depan: ${manualAngka.slice(0, 2)} — tidak ada di daftar taruhan`}
                   </p>
                 )}
               </div>
