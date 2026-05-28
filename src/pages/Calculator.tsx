@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import Kalender from "./Kalender";
+
 import AnalisisNomor from "./AnalisisNomor";
 import SaldoPage from "./SaldoPage";
 import {
@@ -137,36 +137,19 @@ function parseTotoMacauHTML(html: string): ResultRow[] | null {
 }
 
 async function fetchSohokartuResults(): Promise<ResultRow[] | null> {
-  const TARGET = "https://sohokartu.com/history/v2";
-
-  const tryFetch = async (url: string, isJson = false): Promise<string | null> => {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
-      if (!res.ok) return null;
-      if (isJson) {
-        const j = await res.json();
-        return j.contents ?? j.body ?? null;
-      }
-      return await res.text();
-    } catch { return null; }
-  };
-
-  // Try CORS proxies (skip direct fetch — always blocked by CORS)
-  const strategies: Array<() => Promise<string | null>> = [
-    () => tryFetch(`https://corsproxy.io/?${encodeURIComponent(TARGET)}`),
-    () => tryFetch(`https://api.allorigins.win/get?url=${encodeURIComponent(TARGET)}`, true),
-    () => tryFetch(`https://thingproxy.freeboard.io/fetch/${TARGET}`),
-    () => tryFetch(`https://cors-anywhere.herokuapp.com/${TARGET}`),
-  ];
-
-  for (const strategy of strategies) {
-    const html = await strategy();
-    if (!html) continue;
-    if (html.includes("You have been blocked") || html.includes("Blocked Message")) continue;
-    const parsed = parseTotoMacauHTML(html);
-    if (parsed && parsed.length > 0) return parsed;
+  try {
+    const res = await fetch("/api/results/toto-macau", {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (json.results && Array.isArray(json.results) && json.results.length > 0) {
+      return json.results as ResultRow[];
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 // ─── Next slot countdown helper ───────────────────────────────────────────────
@@ -199,7 +182,7 @@ function isNomorMenang(angka: string, nomorList: string): boolean {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type MenuItem = "kalkulator" | "laporan" | "result" | "statistik" | "kalender" | "analisis" | "saldo";
+type MenuItem = "kalkulator" | "laporan" | "result" | "statistik" | "analisis" | "saldo";
 interface PutaranData { putaran:number; taruhan:number; modal:number; akumulasi:number; hadiah:number; profit:number; }
 type SyncStatus = "idle" | "loading" | "saving" | "synced" | "error" | "offline";
 type ResultSource = "live" | "lokal" | "loading";
@@ -757,8 +740,36 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const t = setInterval(() => handleRefreshResults(true), 5 * 60 * 1000);
+    // Poll every 2 minutes to pick up backend updates quickly
+    const t = setInterval(() => handleRefreshResults(true), 2 * 60 * 1000);
     return () => clearInterval(t);
+  }, [autoRefresh]);
+
+  // Slot-aware auto-refresh: trigger 5 min after each WIB draw time
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const DRAW_MINUTES_WIB = [1, 13 * 60, 16 * 60, 19 * 60, 22 * 60, 23 * 60];
+    const DELAY_MIN = 5;
+    const WIB_OFFSET = 7 * 60;
+
+    function msUntilNextTrigger(): number {
+      const now = new Date();
+      const nowWib = (now.getUTCHours() * 60 + now.getUTCMinutes() + WIB_OFFSET) % (24 * 60);
+      const targets = DRAW_MINUTES_WIB.map(d => d + DELAY_MIN);
+      const diffs = targets.map(t => (t > nowWib ? t - nowWib : t + 24 * 60 - nowWib));
+      return Math.min(...diffs) * 60 * 1000;
+    }
+
+    let timer: ReturnType<typeof setTimeout>;
+    function scheduleNext() {
+      const ms = msUntilNextTrigger();
+      timer = setTimeout(() => {
+        handleRefreshResults(true);
+        scheduleNext();
+      }, ms);
+    }
+    scheduleNext();
+    return () => clearTimeout(timer);
   }, [autoRefresh]);
 
   function handleRefreshResults(silent = false) {
@@ -771,18 +782,18 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
           setResultData(rows as typeof FALLBACK_RESULTS);
           setLastRefresh(new Date());
           setResultSource("live");
-          if (!silent) { toast.success(`Data LIVE — ${rows.length} hari dari sohokartu.com`); addNotif("Data Toto Macau diperbarui dari sohokartu.com"); }
+          if (!silent) { toast.success(`Data LIVE — ${rows.length} hari dari masterlive.net`); addNotif("Data Toto Macau diperbarui dari masterlive.net"); }
         } else {
           setResultData([...FALLBACK_RESULTS]);
           setLastRefresh(new Date());
           setResultSource("lokal");
-          if (!silent) { toast.warning("Data lokal ditampilkan — sohokartu.com tidak terjangkau"); }
+          if (!silent) { toast.warning("Data lokal ditampilkan — masterlive.net tidak terjangkau"); }
         }
       })
       .catch(() => {
         setResultData([...FALLBACK_RESULTS]);
         setResultSource("lokal");
-        if (!silent) { toast.error("Koneksi ke sohokartu.com gagal"); }
+        if (!silent) { toast.error("Koneksi ke masterlive.net gagal"); }
       })
       .finally(() => setIsRefreshing(false));
   }
@@ -1187,7 +1198,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
               { id:"laporan",    icon:<FileText className="w-3 h-3"/>, label:"Laporan" },
               { id:"result",     icon:<Award className="w-3 h-3"/>, label:"Result" },
               { id:"statistik",  icon:<BarChart2 className="w-3 h-3"/>, label:"Statistik" },
-              { id:"kalender",   icon:<CalendarDays className="w-3 h-3"/>, label:"Kalender" },
+
               { id:"analisis",   icon:<Hash className="w-3 h-3"/>, label:"Analisis" },
               { id:"saldo",      icon:<Banknote className="w-3 h-3"/>, label:"Saldo" },
             ] as { id:MenuItem; icon:React.ReactNode; label:string }[]).map(m => (
@@ -1654,13 +1665,6 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
           </div>
         )}
 
-        {/* ══ KALENDER ══ */}
-        {menu === "kalender" && (
-          <div className="animate-slide-up">
-            <Kalender histori={histori} isDark={isDark}/>
-          </div>
-        )}
-
         {/* ══ ANALISIS NOMOR ══ */}
         {menu === "analisis" && (
           <div className="animate-slide-up">
@@ -1684,7 +1688,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
             { id:"laporan",    label:"Laporan",    icon:<FileText className="w-4 h-4"/> },
             { id:"result",     label:"Result",     icon:<Award className="w-4 h-4"/> },
             { id:"statistik",  label:"Statistik",  icon:<BarChart2 className="w-4 h-4"/> },
-            { id:"kalender",   label:"Kalender",   icon:<CalendarDays className="w-4 h-4"/> },
+
             { id:"analisis",   label:"Analisis",   icon:<Hash className="w-4 h-4"/> },
             { id:"saldo",      label:"Saldo",      icon:<Banknote className="w-4 h-4"/> },
           ] as { id: MenuItem; label: string; icon: React.ReactNode }[]).map(item => (
