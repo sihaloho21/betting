@@ -1088,6 +1088,7 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
               <div className={`xl:hidden flex items-center gap-2 px-3 py-2.5 rounded-xl font-bold text-sm ${isDark ? "bg-green-500/15 border border-green-500/30 text-green-400" : "bg-green-50 border border-green-200 text-green-700"}`}>
                 <Wallet className="w-4 h-4"/>Saldo: Rp {formatRupiah(saldo)}
               </div>
+              <InputField label="Taruhan Awal" value={taruhanAwal} onChange={v => setField("taruhanAwal", setTaruhanAwal as any, Math.max(100, v))} error={errors.taruhanAwal} prefix="Rp" min={100} step={500} hint="Bet per nomor di putaran pertama" isDark={isDark} inputCls={inputCls}/>
               <InputField label="Jumlah Putaran" value={jumlahPutaran} onChange={v => setField("jumlahPutaran", setJumlahPutaran as any, Math.max(1, v))} error={errors.jumlahPutaran} min={1} max={20} step={1} hint="Maks 20" isDark={isDark} inputCls={inputCls}/>
               <InputField label="Target Profit / Sesi" value={targetProfit} onChange={v => setField("targetProfit", setTargetProfit as any, Math.max(0, v))} error={errors.targetProfit} prefix="Rp" min={0} step={1000} hint="Profit minimum jika menang" isDark={isDark} inputCls={inputCls}/>
               <InputField label="Pengali Menang" value={pengaliMenang} onChange={v => setField("pengaliMenang", setPengaliMenang as any, Math.max(1, v))} error={errors.pengaliMenang} suffix="x" min={1} max={9999} step={1} hint="Biasanya 95x" isDark={isDark} inputCls={inputCls}/>
