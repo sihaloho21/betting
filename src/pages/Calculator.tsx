@@ -399,6 +399,96 @@ function CountdownWidget({ isDark, soundEnabled = false }: { isDark: boolean; so
   );
 }
 
+// ─── DrawSchedulePanel ────────────────────────────────────────────────────────
+const DRAW_SLOTS_WIB = ["00:01", "13:00", "16:00", "19:00", "22:00", "23:00"];
+const DRAW_SLOT_MINUTES: Record<string, number> = {
+  "00:01": 1, "13:00": 780, "16:00": 960, "19:00": 1140, "22:00": 1320, "23:00": 1380,
+};
+
+function getWibMinutes(): number {
+  const now = new Date();
+  return (now.getUTCHours() * 60 + now.getUTCMinutes() + 420) % 1440;
+}
+
+function DrawSchedulePanel({ isDark }: { isDark: boolean }) {
+  const [remaining, setRemaining] = useState("");
+  const [nextSlot, setNextSlot]   = useState("");
+  const [diffMs, setDiffMs]       = useState(Infinity);
+  const [wibNow, setWibNow]       = useState(0);
+
+  useEffect(() => {
+    const update = () => {
+      const wib = getWibMinutes();
+      setWibNow(wib);
+      const next = getNextSlotDate();
+      const label = getNextSlotLabel().replace(" (besok)", "");
+      setNextSlot(label);
+      const diff = next.getTime() - Date.now();
+      setDiffMs(diff);
+      if (diff <= 0) { setRemaining("00:00:00"); return; }
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1_000);
+      setRemaining(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`);
+    };
+    update();
+    const t = setInterval(update, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const isUrgent     = diffMs <= 5 * 60_000;
+  const isVeryUrgent = diffMs <= 60_000;
+
+  const countdownColor = isVeryUrgent
+    ? "text-red-400" : isUrgent
+    ? "text-orange-400" : isDark ? "text-blue-300" : "text-blue-600";
+
+  const countdownBg = isVeryUrgent
+    ? "bg-red-500/20 border-red-500/40" : isUrgent
+    ? "bg-orange-500/15 border-orange-400/30" : isDark
+    ? "bg-blue-500/15 border-blue-500/30" : "bg-blue-50 border-blue-200";
+
+  return (
+    <div className={`rounded-2xl p-4 ${isDark ? "bg-white/5 border border-white/10" : "bg-white border border-slate-200"} shadow-sm`}>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+        {/* Countdown block */}
+        <div className={`flex flex-col items-center justify-center px-5 py-3 rounded-xl border min-w-[140px] ${countdownBg} ${isVeryUrgent ? "animate-pulse" : ""}`}>
+          <div className={`text-[9px] font-black uppercase tracking-widest ${isDark ? "text-white/50" : "text-slate-500"}`}>Draw berikutnya</div>
+          <div className={`text-2xl font-black tabular-nums tracking-wider mt-1 ${countdownColor}`}>{remaining || "…"}</div>
+          <div className={`text-[11px] font-bold mt-0.5 ${isDark ? "text-white/50" : "text-slate-500"}`}>{nextSlot} WIB</div>
+        </div>
+
+        {/* Slot pills */}
+        <div className="flex flex-wrap gap-2">
+          {DRAW_SLOTS_WIB.map(slot => {
+            const slotMin   = DRAW_SLOT_MINUTES[slot];
+            const isPast    = wibNow > slotMin;
+            const isNext    = slot === nextSlot;
+            return (
+              <div key={slot} className={`flex flex-col items-center px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
+                isNext
+                  ? isVeryUrgent
+                    ? "bg-red-500/25 border-red-400/50 text-red-300 scale-110 animate-pulse"
+                    : isUrgent
+                      ? "bg-orange-500/20 border-orange-400/40 text-orange-300 scale-105"
+                      : "bg-green-500/20 border-green-400/40 text-green-300 scale-105"
+                  : isPast
+                    ? isDark ? "bg-white/5 border-white/10 text-white/30" : "bg-slate-100 border-slate-200 text-slate-400"
+                    : isDark ? "bg-white/8 border-white/15 text-white/50" : "bg-slate-50 border-slate-200 text-slate-500"
+              }`}>
+                <span className="tracking-wider">{slot}</span>
+                <span className="text-[9px] font-normal mt-0.5 opacity-75 leading-none">
+                  {isNext ? "⟳ berikutnya" : isPast ? "✓ selesai" : "· menunggu"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"light"; toggleTheme: () => void }) {
   const isDark = theme === "dark";
@@ -1480,6 +1570,8 @@ export default function Calculator({ theme, toggleTheme }: { theme: "dark"|"ligh
                 </div>
               </div>
             </div>
+            {/* Draw schedule countdown */}
+            <DrawSchedulePanel isDark={isDark} />
             {/* Legend */}
             <div className={`flex items-center gap-3 px-3 py-2 rounded-xl text-xs ${isDark ? "bg-white/5 border border-white/10" : "bg-slate-50 border border-slate-200"}`}>
               <span className="font-bold opacity-60">Keterangan:</span>
